@@ -30,7 +30,6 @@ router.post("/connect", async (req, res) => {
   }
 });
 
-// Récupérer les tables
 const oracledb = require("oracledb");
 
 // Récupérer les tables avec colonnes et stats
@@ -55,12 +54,15 @@ router.get("/:key/tables", async (req, res) => {
 
       // Récupérer les colonnes pour chaque table
       const columnsResult = await connection.execute(
-        `SELECT column_name FROM user_tab_columns WHERE table_name = :tableName`,
+        `SELECT column_name, data_type FROM user_tab_columns WHERE table_name = :tableName`,
         [tableName],
         { outFormat: oracledb.OUT_FORMAT_OBJECT }
       );
 
-      const columns = columnsResult.rows.map(col => col.COLUMN_NAME);
+      const columns = columnsResult.rows.map(col => ({
+        name: col.COLUMN_NAME,
+        type: col.DATA_TYPE
+      }));
       totalAttributes += columns.length;
 
       tables.push({
@@ -81,6 +83,24 @@ router.get("/:key/tables", async (req, res) => {
   }
 });
 
+// 🔹 NOUVEAU : Récupérer le nombre de lignes d'une table
+router.get("/:key/tables/:table/rowcount", async (req, res) => {
+  const { key, table } = req.params;
+  const connection = connections[key];
+  if (!connection) return res.status(400).json({ error: "Connexion invalide" });
+
+  try {
+    const result = await connection.execute(
+      `SELECT COUNT(*) as count FROM ${table}`
+    );
+    
+    res.json({ rowCount: result.rows[0][0] });
+  } catch (err) {
+    console.error("Erreur rowcount:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Récupérer la structure d'une table
 router.get("/:key/tables/:table/structure", async (req, res) => {
   const { key, table } = req.params;
@@ -92,13 +112,14 @@ router.get("/:key/tables/:table/structure", async (req, res) => {
       `SELECT column_name, data_type, nullable 
        FROM user_tab_columns 
        WHERE table_name = :table`,
-      [table.toUpperCase()]
+      [table.toUpperCase()],
+      { outFormat: oracledb.OUT_FORMAT_OBJECT }
     );
 
     const columns = result.rows.map(row => ({
-      name: row[0],
-      type: row[1],
-      nullable: row[2] === 'Y'
+      name: row.COLUMN_NAME,
+      type: row.DATA_TYPE,
+      nullable: row.NULLABLE === 'Y'
     }));
 
     const rowCountRes = await connection.execute(
@@ -134,19 +155,6 @@ router.get("/:key/tables/:table/sample", async (req, res) => {
   }
 });
 
-// Fermer la connexion
-router.delete("/:key", async (req, res) => {
-  const { key } = req.params;
-  const connection = connections[key];
-  if (connection) {
-    await connection.close();
-    delete connections[key];
-  }
-  res.json({ success: true });
-});
-
-module.exports = router;
-
 // Analyser une colonne pour la fragmentation
 router.get("/:key/tables/:table/columns/:column/analyze", async (req, res) => {
   const { key, table, column } = req.params;
@@ -180,3 +188,16 @@ router.get("/:key/tables/:table/columns/:column/analyze", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Fermer la connexion
+router.delete("/:key", async (req, res) => {
+  const { key } = req.params;
+  const connection = connections[key];
+  if (connection) {
+    await connection.close();
+    delete connections[key];
+  }
+  res.json({ success: true });
+});
+
+module.exports = router;
